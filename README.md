@@ -1,7 +1,6 @@
 # Your ViT is Secretly an Image Segmentation Model  
-[![Papers with Code: SOTA on BRAVO (OOD)](https://paperswithcode.co/api/v1/papers/2503.19108/leaderboard-badge.svg?eval=640&live=1)](https://paperswithcode.co/benchmark/bravo-ood?task=image-segmentation&eval=640)
 [![Papers with Code: SOTA on COCO 2017 Panoptic Segmentation](https://paperswithcode.co/api/v1/papers/2503.19108/leaderboard-badge.svg?eval=6260&live=1)](https://paperswithcode.co/benchmark/coco-2017-panoptic-segmentation?task=image-segmentation&eval=6260)
-
+[![Papers with Code: SOTA on BRAVO (OOD)](https://paperswithcode.co/api/v1/papers/2503.19108/leaderboard-badge.svg?eval=640&live=1)](https://paperswithcode.co/benchmark/bravo-ood?task=image-segmentation&eval=640)
 
 **CVPR 2025 ✨ Highlight** · [📄 Paper](https://arxiv.org/abs/2503.19108)
 
