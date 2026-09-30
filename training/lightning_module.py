@@ -898,27 +898,6 @@ class LightningModule(lightning.LightningModule):
                 for k, v in ckpt.items()
                 if "class_head" not in k and "class_predictor" not in k
             }
-        # Interpolate positional embeddings if the checkpoint was trained at a
-        # different resolution than the current model.
-        pos_key = "network.encoder.backbone.pos_embed"
-        if pos_key in ckpt and hasattr(self.network.encoder.backbone, "pos_embed"):
-            ckpt_pos = ckpt[pos_key]       # [1, src_patches, C]
-            model_pos = self.network.encoder.backbone.pos_embed  # [1, tgt_patches, C]
-            if ckpt_pos.shape != model_pos.shape:
-                src_n, tgt_n = ckpt_pos.shape[1], model_pos.shape[1]
-                C = ckpt_pos.shape[2]
-                src_h = src_w = int(src_n ** 0.5)
-                tgt_h = tgt_w = int(tgt_n ** 0.5)
-                pos_2d = ckpt_pos.reshape(1, src_h, src_w, C).permute(0, 3, 1, 2).float()
-                pos_2d = torch.nn.functional.interpolate(
-                    pos_2d, size=(tgt_h, tgt_w), mode="bicubic", align_corners=False
-                ).to(ckpt_pos.dtype)
-                ckpt[pos_key] = pos_2d.permute(0, 2, 3, 1).reshape(1, tgt_n, C)
-                logging.info(
-                    f"Interpolated pos_embed from {src_h}x{src_w} ({src_n} patches) "
-                    f"to {tgt_h}x{tgt_w} ({tgt_n} patches)"
-                )
-
         logging.info(f"Loaded {len(ckpt)} keys")
         return ckpt
 

@@ -85,7 +85,6 @@ def _should_check_val_fx(self: _TrainingEpochLoop, data_fetcher: _DataFetcher) -
 class LightningCLI(cli.LightningCLI):
     def __init__(self, *args, **kwargs):
         logging.getLogger().setLevel(logging.INFO)
-        logging.getLogger("torch_migraphx").setLevel(logging.WARNING)
         torch.set_float32_matmul_precision("medium")
         torch._dynamo.config.capture_scalar_outputs = True
         torch._dynamo.config.suppress_errors = True
@@ -201,7 +200,7 @@ def cli_main():
         save_config_callback=None,
         seed_everything_default=0,
         trainer_defaults={
-            "precision": "16-mixed",
+            "precision": "16-true",
             "enable_model_summary": False,
             "callbacks": [
                 ModelSummary(max_depth=3),
