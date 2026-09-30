@@ -526,11 +526,20 @@ class LightningModule(lightning.LightningModule):
 
     def _on_eval_end_panoptic(self, log_prefix):
         if not self.trainer.sanity_checking:
-            rank_zero_info(
-                f"{bold_green}PQ All: {self.trainer.callback_metrics[f'metrics/{log_prefix}_pq_all'] * 100:.1f} | "
-                f"PQ Things: {self.trainer.callback_metrics[f'metrics/{log_prefix}_pq_things'] * 100:.1f} | "
-                f"PQ Stuff: {self.trainer.callback_metrics[f'metrics/{log_prefix}_pq_stuff'] * 100:.1f}{reset}"
+            metrics = self.trainer.callback_metrics
+            msg = (
+                f"{bold_green}PQ All: {metrics[f'metrics/{log_prefix}_pq_all'] * 100:.1f} | "
+                f"PQ Things: {metrics[f'metrics/{log_prefix}_pq_things'] * 100:.1f} | "
+                f"PQ Stuff: {metrics[f'metrics/{log_prefix}_pq_stuff'] * 100:.1f}"
             )
+            ms_key = f"metrics/{log_prefix}_ms_per_image"
+            fps_key = f"metrics/{log_prefix}_fps"
+            if ms_key in metrics and fps_key in metrics:
+                msg += (
+                    f" | Latency: {metrics[ms_key]:.1f} ms/img"
+                    f" | FPS: {metrics[fps_key]:.1f}"
+                )
+            rank_zero_info(msg + reset)
 
     @torch.compiler.disable
     def plot_semantic(

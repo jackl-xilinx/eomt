@@ -140,7 +140,12 @@ class LightningCLI(cli.LightningCLI):
         )
 
     def fit(self, model, **kwargs):
-        if hasattr(self.trainer.logger.experiment, "log_code"):
+        if self.trainer.logger is None:
+            self.trainer.callbacks = [
+                cb for cb in self.trainer.callbacks
+                if not isinstance(cb, LearningRateMonitor)
+            ]
+        if self.trainer.logger is not None and hasattr(self.trainer.logger.experiment, "log_code"):
             is_gitignored = parse_gitignore(".gitignore")
             include_fn = lambda path: path.endswith(".py") or path.endswith(".yaml")
             self.trainer.logger.experiment.log_code(

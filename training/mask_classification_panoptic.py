@@ -5,6 +5,8 @@
 
 
 from typing import List, Optional
+import time
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
@@ -85,6 +87,9 @@ class MaskClassificationPanoptic(LightningModule):
             self.network.num_blocks + 1 if self.network.masked_attn_enabled else 1,
         )
 
+        self._infer_total_ms = 0.0
+        self._infer_total_images = 0
+
     def eval_step(
         self,
         batch,
@@ -95,7 +100,15 @@ class MaskClassificationPanoptic(LightningModule):
 
         img_sizes = [img.shape[-2:] for img in imgs]
         transformed_imgs = self.resize_and_pad_imgs_instance_panoptic(imgs)
+
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        t0 = time.perf_counter()
         mask_logits_per_layer, class_logits_per_layer = self(transformed_imgs)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        self._infer_total_ms += (time.perf_counter() - t0) * 1000
+        self._infer_total_images += len(imgs)
 
         is_crowds = [target["is_crowd"] for target in targets]
         targets = self.to_per_pixel_targets_panoptic(targets)
@@ -118,6 +131,13 @@ class MaskClassificationPanoptic(LightningModule):
 
     def on_validation_epoch_end(self):
         self._on_eval_epoch_end_panoptic("val")
+        if self._infer_total_images > 0:
+            ms_per_image = self._infer_total_ms / self._infer_total_images
+            fps = 1000.0 / ms_per_image
+            self.log("metrics/val_ms_per_image", ms_per_image)
+            self.log("metrics/val_fps", fps)
+        self._infer_total_ms = 0.0
+        self._infer_total_images = 0
 
     def on_validation_end(self):
         self._on_eval_end_panoptic("val")
