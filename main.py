@@ -156,7 +156,7 @@ class LightningCLI(cli.LightningCLI):
         import torch_migraphx  # noqa: F401 — registers the backend
         from migraphx_patch import patch_mgx_module
         patch_mgx_module()
-        logging.info("MGXModule output buffer caching patch applied")
+        logging.info("MGXModule.forward patched with @torch.compiler.disable to prevent TraceError fallbacks")
 
         compiled_model_path = self.config[subcommand].get("compiled_model_path", None)
         options = {}
