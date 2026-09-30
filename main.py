@@ -121,15 +121,6 @@ class LightningCLI(cli.LightningCLI):
                  "If the file exists it is loaded (skipping recompilation); "
                  "otherwise the compiled engine is saved there after the first run.",
         )
-        parser.add_argument(
-            "--exhaustive_tune",
-            action="store_true",
-            help="Enable MIGraphX exhaustive kernel autotuning. Searches all available "
-                 "kernel implementations for each op to find the fastest configuration. "
-                 "Significantly increases first-run compilation time but improves "
-                 "steady-state performance, especially for GEMMs. Results are saved "
-                 "to --compiled_model_path and reused on subsequent runs.",
-        )
 
         parser.link_arguments(
             "data.init_args.num_classes", "model.init_args.num_classes"
@@ -163,13 +154,12 @@ class LightningCLI(cli.LightningCLI):
             return model
 
         import torch_migraphx  # noqa: F401 — registers the backend
+        from migraphx_patch import patch_mgx_module
+        patch_mgx_module()
+        logging.info("MGXModule output buffer caching patch applied")
 
         compiled_model_path = self.config[subcommand].get("compiled_model_path", None)
-        exhaustive_tune = self.config[subcommand].get("exhaustive_tune", False)
         options = {}
-        if exhaustive_tune:
-            options["exhaustive_tune"] = True
-            logging.info("MIGraphX exhaustive tuning enabled — first-run compilation will be slow")
         if compiled_model_path:
             if os.path.exists(compiled_model_path):
                 logging.info(f"Loading compiled MIGraphX engine from {compiled_model_path}")
