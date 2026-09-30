@@ -898,7 +898,6 @@ class LightningModule(lightning.LightningModule):
                 for k, v in ckpt.items()
                 if "class_head" not in k and "class_predictor" not in k
             }
-
         # Interpolate positional embeddings if the checkpoint was trained at a
         # different resolution than the current model.
         pos_key = "network.encoder.backbone.pos_embed"

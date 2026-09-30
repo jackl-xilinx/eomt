@@ -89,8 +89,6 @@ class MaskClassificationPanoptic(LightningModule):
 
         self._infer_total_ms = 0.0
         self._infer_total_images = 0
-        self._infer_warmup_remaining = 0  # set externally by main.py after compilation
-        self._profiler = None             # set externally by main.py when profiling
 
     def eval_step(
         self,
@@ -103,18 +101,14 @@ class MaskClassificationPanoptic(LightningModule):
         img_sizes = [img.shape[-2:] for img in imgs]
         transformed_imgs = self.resize_and_pad_imgs_instance_panoptic(imgs)
 
-        if self._infer_warmup_remaining > 0:
-            self._infer_warmup_remaining -= 1
-            mask_logits_per_layer, class_logits_per_layer = self(transformed_imgs)
-        else:
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
-            t0 = time.perf_counter()
-            mask_logits_per_layer, class_logits_per_layer = self(transformed_imgs)
-            if torch.cuda.is_available():
-                torch.cuda.synchronize()
-            self._infer_total_ms += (time.perf_counter() - t0) * 1000
-            self._infer_total_images += len(imgs)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        t0 = time.perf_counter()
+        mask_logits_per_layer, class_logits_per_layer = self(transformed_imgs)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        self._infer_total_ms += (time.perf_counter() - t0) * 1000
+        self._infer_total_images += len(imgs)
 
         is_crowds = [target["is_crowd"] for target in targets]
         targets = self.to_per_pixel_targets_panoptic(targets)
@@ -134,9 +128,6 @@ class MaskClassificationPanoptic(LightningModule):
                 self.overlap_thresh,
             )
             self.update_metrics_panoptic(preds, targets, is_crowds, i)
-
-        if self._profiler is not None:
-            self._profiler.step()
 
     def on_validation_epoch_end(self):
         self._on_eval_epoch_end_panoptic("val")
