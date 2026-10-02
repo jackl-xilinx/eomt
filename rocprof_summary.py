@@ -4,10 +4,12 @@ Parse rocprofv3 CSV output and print a kernel summary table with optional
 roofline analysis.
 
 Usage:
-    python3 rocprof_summary.py <directory>            # auto-detects newest run
-    python3 rocprof_summary.py <directory> <pid>      # selects a specific run by PID
-    python3 rocprof_summary.py <directory> --all      # summarises every run found
-    python3 rocprof_summary.py <directory> --top N    # show top N kernels (default 20)
+    python3 rocprof_summary.py <directory>                  # auto-detects newest run
+    python3 rocprof_summary.py <directory> <pid>            # selects a specific run by PID
+    python3 rocprof_summary.py <directory> --all            # summarises every run found
+    python3 rocprof_summary.py <directory> --top N          # show top N kernels (default 20)
+    python3 rocprof_summary.py <dir1> <dir2> [<dir3> ...]   # multi-pass: newest run per dir,
+                                                            #   counters merged automatically
 
 Output columns (kernel_trace.csv):
     Dispatches  — number of times the kernel was launched
@@ -533,32 +535,43 @@ def plot_roofline(rl_points, output_path):
 # Entry point
 # ---------------------------------------------------------------------------
 
+def newest_run(directory):
+    """
+    Return the single latest run from *directory* as a dict with keys
+    'pid', 'kernel_trace', and 'counters'.  Raises SystemExit if none found.
+    """
+    runs = find_runs(directory)
+    if not runs:
+        print(f"No *_kernel_trace.csv files found in: {directory}", file=sys.stderr)
+        sys.exit(1)
+    pid = max(runs, key=lambda p: int(p))
+    return {"pid": pid, **runs[pid]}
+
+
 def main():
     if len(sys.argv) < 2:
-        print(f"Usage: {sys.argv[0]} <directory> [<pid> | --all] [--top N] [--extra-counters <csv>] [--plot [file.png]]")
+        print(f"Usage: {sys.argv[0]} <dir> [<dir2> ...] [--all] [--top N] [--extra-counters <csv>] [--plot [file.png]]")
         print()
-        print("  <directory>            folder containing rocprofv3 CSV files")
-        print("  <pid>                  profile a specific run by PID (default: newest)")
-        print("  --all                  summarise every run found in the directory")
-        print("  --top N                show top N kernels (default: 20)")
-        print("  --extra-counters F     merge an additional counter CSV from a second PMU pass")
-        print("  --extra-counter F      alias for --extra-counters (both accepted)")
-        print("  --plot [file.png]      save a roofline scatter plot (default: roofline.png)")
+        print("  Single-directory mode (original):")
+        print("    <dir>                  folder containing rocprofv3 CSV files")
+        print("    <pid>                  (optional) select a specific run by PID; default: newest")
+        print("    --all                  summarise every run found in the directory")
         print()
-        print("  Two-pass roofline example (when 10 counters exceed hardware PMU limit):")
-        print("    # Pass 1 — utilisation counters")
-        print("    rocprofv3 --kernel-trace --pmc GPUBusy OccupancyPercent MemUnitBusy WriteUnitStalled \\")
-        print("      -d ./rocprof_pass1 -f csv -- python3 main.py validate ...")
-        print("    # Pass 2 — roofline counters (no --kernel-trace; reuse trace from pass 1)")
-        print("    rocprofv3 --pmc FETCH_SIZE WRITE_SIZE VALUInsts Wavefronts L2CacheHit \\")
-        print("      -d ./rocprof_pass2 -f csv -- python3 main.py validate ...")
-        print("    # Merge both passes:")
-        print("    python3 rocprof_summary.py ./rocprof_pass1/hostname/ \\")
-        print("      --extra-counters ./rocprof_pass2/hostname/<pid2>_counter_collection.csv")
+        print("  Multi-directory mode (two-pass roofline, no PID needed):")
+        print("    <dir1> <dir2> ...      pass one or more directories; the newest run from each")
+        print("                           is selected automatically and their counters are merged.")
+        print("    Example:")
+        print("      python3 rocprof_summary.py \\")
+        print("        rocprof_output_roofline_pass1/xcoradaie217 \\")
+        print("        rocprof_output_roofline_pass2/xcoradaie217")
+        print()
+        print("  Shared options:")
+        print("    --top N                show top N kernels (default: 20)")
+        print("    --extra-counters F     merge an additional counter CSV")
+        print("    --plot [file.png]      save a roofline scatter plot (default: roofline.png)")
         sys.exit(1)
 
-    directory = sys.argv[1]
-    args      = sys.argv[2:]
+    args = sys.argv[1:]
 
     top_n = 20
     if "--top" in args:
@@ -585,28 +598,69 @@ def main():
             extra_counters.append(path)
             args = [a for i, a in enumerate(args) if i not in (idx, idx + 1)]
 
-    runs = find_runs(directory)
-    if not runs:
-        print(f"No *_kernel_trace.csv files found in: {directory}", file=sys.stderr)
-        sys.exit(1)
+    want_all = "--all" in args
+    if want_all:
+        args = [a for a in args if a != "--all"]
 
-    if "--all" in args:
-        selected = runs
-    elif args:
-        pid = args[0]
-        if pid not in runs:
-            print(f"PID '{pid}' not found. Available: {', '.join(sorted(runs))}", file=sys.stderr)
-            sys.exit(1)
-        selected = {pid: runs[pid]}
-    else:
-        pid      = max(runs, key=lambda p: int(p))
-        selected = {pid: runs[pid]}
+    # Separate positional directory arguments from any remaining flags
+    dirs = [a for a in args if not a.startswith("--") and os.path.isdir(a)]
+    non_dirs = [a for a in args if not a.startswith("--") and not os.path.isdir(a)]
 
     all_rl_points = []
-    for pid, paths in sorted(selected.items(), key=lambda x: int(x[0])):
-        counter_paths = paths["counters"] + extra_counters
-        rl_points = print_summary(pid, paths["kernel_trace"], counter_paths, top_n=top_n)
+
+    if len(dirs) > 1:
+        # ---------------------------------------------------------------
+        # Multi-directory mode: one newest run per directory, merged.
+        # ---------------------------------------------------------------
+        if want_all or non_dirs:
+            print(
+                "Warning: --all and explicit PIDs are ignored in multi-directory mode "
+                "(newest run per directory is always used).",
+                file=sys.stderr,
+            )
+        runs_list = [newest_run(d) for d in dirs]
+        # The kernel trace comes from the first directory that has one.
+        trace_run = next((r for r in runs_list if r["kernel_trace"]), None)
+        if trace_run is None:
+            print("No kernel trace found in any of the supplied directories.", file=sys.stderr)
+            sys.exit(1)
+        counter_paths = []
+        for r in runs_list:
+            counter_paths.extend(r["counters"])
+        counter_paths.extend(extra_counters)
+        label = " + ".join(dirs)
+        rl_points = print_summary(label, trace_run["kernel_trace"], counter_paths, top_n=top_n)
         all_rl_points.extend(rl_points)
+    else:
+        # ---------------------------------------------------------------
+        # Single-directory mode (original behaviour).
+        # ---------------------------------------------------------------
+        directory = dirs[0] if dirs else (args[0] if args else None)
+        if directory is None or not os.path.isdir(directory):
+            print(f"Directory not found: {directory}", file=sys.stderr)
+            sys.exit(1)
+
+        runs = find_runs(directory)
+        if not runs:
+            print(f"No *_kernel_trace.csv files found in: {directory}", file=sys.stderr)
+            sys.exit(1)
+
+        if want_all:
+            selected = runs
+        elif non_dirs:
+            pid = non_dirs[0]
+            if pid not in runs:
+                print(f"PID '{pid}' not found. Available: {', '.join(sorted(runs))}", file=sys.stderr)
+                sys.exit(1)
+            selected = {pid: runs[pid]}
+        else:
+            pid      = max(runs, key=lambda p: int(p))
+            selected = {pid: runs[pid]}
+
+        for pid, paths in sorted(selected.items(), key=lambda x: int(x[0])):
+            counter_paths = paths["counters"] + extra_counters
+            rl_points = print_summary(pid, paths["kernel_trace"], counter_paths, top_n=top_n)
+            all_rl_points.extend(rl_points)
 
     if plot_path and all_rl_points:
         plot_roofline(all_rl_points, plot_path)
