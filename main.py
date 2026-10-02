@@ -86,6 +86,7 @@ def _should_check_val_fx(self: _TrainingEpochLoop, data_fetcher: _DataFetcher) -
 class LightningCLI(cli.LightningCLI):
     def __init__(self, *args, **kwargs):
         logging.getLogger().setLevel(logging.INFO)
+        logging.getLogger("torch_migraphx").setLevel(logging.WARNING)
         torch.set_float32_matmul_precision("medium")
         torch._dynamo.config.capture_scalar_outputs = True
         torch._dynamo.config.suppress_errors = True
@@ -116,12 +117,34 @@ class LightningCLI(cli.LightningCLI):
             "--compile_backend",
             type=str,
             default="inductor",
-            choices=["eager", "inductor"],
+            choices=["eager", "inductor", "migraphx"],
             help=(
-                "torch.compile backend. "
+                "Execution backend. "
                 "'inductor' (default) compiles with the TorchInductor/Triton backend. "
-                "'eager' disables compilation and runs in pure PyTorch eager mode."
+                "'eager' disables compilation and runs in pure PyTorch eager mode. "
+                "'migraphx' compiles with AMD MIGraphX (ROCm only); use with "
+                "--compiled_model_path to save/load the engine and --exhaustive_tune "
+                "to search for the fastest kernel configuration."
             ),
+        )
+        parser.add_argument(
+            "--compiled_model_path",
+            type=str,
+            default=None,
+            help="Path to save/load the compiled MIGraphX engine (.mgx). "
+                 "If the file exists it is loaded (skipping recompilation); "
+                 "otherwise the compiled engine is saved there after the first run. "
+                 "Only used when --compile_backend=migraphx.",
+        )
+        parser.add_argument(
+            "--exhaustive_tune",
+            action="store_true",
+            help="Enable MIGraphX exhaustive kernel autotuning. Searches all available "
+                 "kernel implementations for each op to find the fastest configuration. "
+                 "Significantly increases first-run compilation time but improves "
+                 "steady-state performance, especially for GEMMs. Results are saved "
+                 "to --compiled_model_path and reused on subsequent runs. "
+                 "Only used when --compile_backend=migraphx.",
         )
         parser.add_argument(
             "--compile_mode",
@@ -246,10 +269,35 @@ class LightningCLI(cli.LightningCLI):
             return model
 
         backend = cfg.get("compile_backend", "inductor")
+
         if backend == "eager":
-            logging.info("compile_backend=eager: running in pure eager mode (no torch.compile)")
+            logging.info("compile_backend=eager: running in pure PyTorch eager mode (no torch.compile)")
             return model
 
+        if backend == "migraphx":
+            import torch_migraphx  # noqa: F401 — registers the backend
+            from migraphx_patch import patch_mgx_module
+            patch_mgx_module()
+            logging.info("MGXModule patched: @torch.compiler.disable on forward + output buffer caching")
+
+            compiled_model_path = cfg.get("compiled_model_path", None)
+            exhaustive_tune = cfg.get("exhaustive_tune", False)
+            options = {}
+            if exhaustive_tune:
+                options["exhaustive_tune"] = True
+                logging.info("MIGraphX exhaustive tuning enabled — first-run compilation will be slow")
+            if compiled_model_path:
+                if os.path.exists(compiled_model_path):
+                    logging.info(f"Loading compiled MIGraphX engine from {compiled_model_path}")
+                    options["load_compiled"] = compiled_model_path
+                else:
+                    logging.info(f"Will save compiled MIGraphX engine to {compiled_model_path}")
+                    options["save_compiled"] = compiled_model_path
+
+            logging.info("torch.compile(backend='migraphx')")
+            return torch.compile(model, backend="migraphx", options=options)
+
+        # inductor (default)
         cache_dir = cfg.get("inductor_cache_dir", None)
         if cache_dir:
             os.environ["TORCHINDUCTOR_CACHE_DIR"] = cache_dir
