@@ -11,6 +11,7 @@ import jsonargparse._typehints as _t
 from types import MethodType
 from gitignore_parser import parse_gitignore
 import logging
+import os
 import torch
 import torch._inductor.config
 import warnings
@@ -23,7 +24,6 @@ from training.lightning_module import LightningModule
 from datasets.lightning_data_module import LightningDataModule
 
 # Suppress PyTorch FX warnings for DINOv3 models
-import os
 os.environ["TORCH_LOGS"] = "-dynamo"
 
 
@@ -86,6 +86,7 @@ def _should_check_val_fx(self: _TrainingEpochLoop, data_fetcher: _DataFetcher) -
 class LightningCLI(cli.LightningCLI):
     def __init__(self, *args, **kwargs):
         logging.getLogger().setLevel(logging.INFO)
+        logging.getLogger("torch_migraphx").setLevel(logging.WARNING)
         torch.set_float32_matmul_precision("medium")
         torch._dynamo.config.capture_scalar_outputs = True
         torch._dynamo.config.suppress_errors = True
@@ -112,15 +113,26 @@ class LightningCLI(cli.LightningCLI):
         super().__init__(*args, **kwargs)
 
     def add_arguments_to_parser(self, parser):
+        parser.add_argument("--compile_disabled", action="store_true")
+        parser.add_argument(
+            "--compiled_model_path",
+            type=str,
+            default=None,
+            help="Path to save/load the compiled MIGraphX engine (.mgx). "
+                 "If the file exists it is loaded (skipping recompilation); "
+                 "otherwise the compiled engine is saved there after the first run. "
+                 "Only used when --compile_backend=migraphx.",
+        )
         parser.add_argument(
             "--compile_backend",
             type=str,
             default="inductor",
-            choices=["eager", "inductor"],
+            choices=["eager", "inductor", "migraphx"],
             help=(
                 "torch.compile backend. "
                 "'inductor' (default) compiles with the TorchInductor/Triton backend. "
-                "'eager' disables compilation and runs in pure PyTorch eager mode."
+                "'eager' disables compilation and runs in pure PyTorch eager mode. "
+                "'migraphx' compiles with the MIGraphX backend (requires torch_migraphx)."
             ),
         )
         parser.add_argument(
@@ -241,6 +253,10 @@ class LightningCLI(cli.LightningCLI):
         """Apply torch.compile according to --compile_backend and --compile_mode."""
         cfg = self.config[subcommand]
 
+        if cfg.get("compile_disabled", False):
+            logging.info("--compile_disabled set: skipping torch.compile")
+            return model
+
         if cfg.get("cpu", False):
             logging.info("--cpu set: skipping torch.compile (not beneficial on CPU)")
             return model
@@ -249,6 +265,20 @@ class LightningCLI(cli.LightningCLI):
         if backend == "eager":
             logging.info("compile_backend=eager: running in pure eager mode (no torch.compile)")
             return model
+
+        if backend == "migraphx":
+            import torch_migraphx  # noqa: F401 — registers the backend
+            compiled_model_path = cfg.get("compiled_model_path", None)
+            options = {}
+            if compiled_model_path:
+                if os.path.exists(compiled_model_path):
+                    logging.info(f"Loading compiled MIGraphX engine from {compiled_model_path}")
+                    options["load_compiled"] = compiled_model_path
+                else:
+                    logging.info(f"Will save compiled MIGraphX engine to {compiled_model_path}")
+                    options["save_compiled"] = compiled_model_path
+            logging.info(f"torch.compile(backend='migraphx')")
+            return torch.compile(model, backend="migraphx", options=options)
 
         cache_dir = cfg.get("inductor_cache_dir", None)
         if cache_dir:

@@ -4,6 +4,7 @@
 # ---------------------------------------------------------------
 
 
+import torch
 from torch import nn
 from timm.layers import LayerNorm2d
 
@@ -29,6 +30,7 @@ class ScaleBlock(nn.Module):
         )
         self.norm = LayerNorm2d(embed_dim)
 
+    @torch.compiler.disable
     def forward(self, x):
         x = self.conv1(x)
         x = self.act(x)
